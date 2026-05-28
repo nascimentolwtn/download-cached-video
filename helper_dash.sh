@@ -170,13 +170,13 @@ if [ -d audio ] && [ -f audio/seg_1.mp4 ]; then
     log "Remuxing video and audio..."
     # DASH MP4 segments are fragmented - concatenate init + media segments properly
     log "⚠ Note: DASH MP4 merge may require additional processing"
-    (cat video/seg_1.mp4 video/seg_2.mp4 video/seg_3.mp4 video/seg_4.mp4) > merged_video.m4v
-    (cat audio/seg_1.mp4 audio/seg_2.mp4 audio/seg_3.mp4 audio/seg_4.mp4 audio/seg_5.mp4) > merged_audio.m4a
+    find video -name "seg_*.mp4" -type f | sort -V | xargs cat > merged_video.m4v
+    find audio -name "seg_*.mp4" -type f | sort -V | xargs cat > merged_audio.m4a
     ffmpeg -i merged_video.m4v -i merged_audio.m4a -c copy -map 0 -map 1 "video_${selected_res}.mp4" -y 2>&1 | grep -v "frame=" | head -5
 else
     log "Concatenating video only..."
     # Concatenate DASH MP4 segments
-    (cat video/seg_1.mp4 video/seg_2.mp4 video/seg_3.mp4 video/seg_4.mp4) > "video_${selected_res}.mp4"
+    find video -name "seg_*.mp4" -type f | sort -V | xargs cat > "video_${selected_res}.mp4"
 fi
 
 # Output file location
