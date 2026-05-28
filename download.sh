@@ -204,19 +204,24 @@ method_har_dash() {
 
     log "Extracting DASH manifest from HAR file"
 
+    # Create temp file for JSON output
+    TEMP_JSON="/tmp/dash_info_$$.json"
+
     # Extract headers and manifest info
-    dash_info=$(python3 << 'PYTHON'
+    python3 - "$har_file" "$TEMP_JSON" << 'PYTHON'
 import json
 import sys
 import xml.etree.ElementTree as ET
 
 har_file = sys.argv[1]
+output_file = sys.argv[2]
 
 try:
     with open(har_file) as f:
         har = json.load(f)
 except Exception as e:
-    print(json.dumps({"error": str(e)}))
+    with open(output_file, 'w') as f:
+        json.dump({"error": str(e)}, f)
     sys.exit(1)
 
 mpd_content = None
@@ -242,131 +247,115 @@ for entry in har['log']['entries']:
             mpd_content = resp['content']['text']
 
 if not mpd_content:
-    print(json.dumps({"error": "No DASH manifest found"}))
+    with open(output_file, 'w') as f:
+        json.dump({"error": "No DASH manifest found"}, f)
     sys.exit(1)
 
 # Parse manifest to extract video representations
 try:
     root = ET.fromstring(mpd_content)
 except ET.ParseError as e:
-    print(json.dumps({"error": f"Failed to parse manifest: {e}"}))
+    with open(output_file, 'w') as f:
+        json.dump({"error": f"Failed to parse manifest: {e}"}, f)
     sys.exit(1)
 
 ns = {'dash': 'urn:mpeg:dash:schema:mpd:2011'}
 
 # Find video resolutions
 video_reps = {}
-audio_info = {}
 
 for adapt_set in root.findall('.//dash:AdaptationSet', ns):
     mime_type = adapt_set.get('mimeType', '')
+    if 'video' not in mime_type:
+        continue
 
     for rep in adapt_set.findall('dash:Representation', ns):
         width = rep.get('width')
         height = rep.get('height')
-        rep_id = rep.get('id', '')
 
-        # Store video representation info
         if width and height:
             res_key = f"{width}x{height}"
             video_reps[res_key] = {
-                'id': rep_id,
                 'width': width,
                 'height': height,
-                'bandwidth': rep.get('bandwidth'),
-            }
-
-        # Store audio representation info
-        elif 'audio' in mime_type:
-            audio_info[rep_id] = {
-                'id': rep_id,
                 'bandwidth': rep.get('bandwidth'),
             }
 
 # Get manifest base URL
 manifest_base = '/'.join(mpd_url.split('/')[:-1]) + '/' if mpd_url else ''
 
-print(json.dumps({
-    'mpd_url': mpd_url,
-    'mpd_content': mpd_content,
-    'manifest_base': manifest_base,
-    'video_reps': video_reps,
-    'audio_info': audio_info,
-    'headers': headers,
-}))
-sys.exit(0)
+with open(output_file, 'w') as f:
+    json.dump({
+        'mpd_url': mpd_url,
+        'mpd_content': mpd_content,
+        'manifest_base': manifest_base,
+        'video_reps': video_reps,
+        'headers': headers,
+    }, f)
 PYTHON
-$(cat <<'ENDARGS'
-$har_file
-ENDARGS
-)
-    )
 
-    error_check=$(echo "$dash_info" | python3 -c "import sys, json; d=json.load(sys.stdin); print(d.get('error', ''))" 2>/dev/null)
-    if [ -n "$error_check" ]; then
-        error "$error_check"
+    # Check for errors
+    if ! [ -f "$TEMP_JSON" ]; then
+        error "Failed to extract DASH manifest"
     fi
 
-    mpd_url=$(echo "$dash_info" | python3 -c "import sys, json; print(json.load(sys.stdin)['mpd_url'])")
-    mpd_content=$(echo "$dash_info" | python3 -c "import sys, json; print(json.load(sys.stdin)['mpd_content'])")
-    manifest_base=$(echo "$dash_info" | python3 -c "import sys, json; print(json.load(sys.stdin)['manifest_base'])")
+    error_msg=$(python3 -c "import json; d=json.load(open('$TEMP_JSON')); print(d.get('error', ''))")
+    if [ -n "$error_msg" ]; then
+        rm -f "$TEMP_JSON"
+        error "$error_msg"
+    fi
+
+    # Extract data from JSON
+    mpd_url=$(python3 -c "import json; print(json.load(open('$TEMP_JSON'))['mpd_url'])")
+    mpd_content=$(python3 -c "import json; d=json.load(open('$TEMP_JSON')); print(d['mpd_content'])")
+    manifest_base=$(python3 -c "import json; print(json.load(open('$TEMP_JSON'))['manifest_base'])")
 
     log "Found DASH manifest: $mpd_url"
 
     # Show available resolutions
     log "Available Resolutions:"
     echo ""
-    echo "$dash_info" | python3 << 'PYTHON'
-import sys, json
-data = json.load(sys.stdin)
+    python3 << PYTHON
+import json
+with open('$TEMP_JSON') as f:
+    data = json.load(f)
 reps = data['video_reps']
 options = sorted(reps.items(), key=lambda x: int(x[1]['width']))
 for i, (res, info) in enumerate(options, 1):
-    print(f"  {i}. {res} ({info['bandwidth']} bps)")
+    print(f"  {i}. {res}")
 PYTHON
     echo ""
 
-    # Prompt user for resolution selection
-    num_resolutions=$(echo "$dash_info" | python3 -c "import sys, json; print(len(json.load(sys.stdin)['video_reps']))")
-    read -p "Select resolution [1-$num_resolutions]: " choice
+    # Prompt user
+    num_reps=$(python3 -c "import json; print(len(json.load(open('$TEMP_JSON'))['video_reps']))")
+    read -p "Select resolution [1-$num_reps]: " choice
 
     # Get selected resolution
-    selected_res=$(echo "$dash_info" | python3 << PYTHON
-import sys, json
-data = json.load(sys.stdin)
+    selected_res=$(python3 << PYTHON
+import json
+with open('$TEMP_JSON') as f:
+    data = json.load(f)
 reps = data['video_reps']
 options = sorted(reps.items(), key=lambda x: int(x[1]['width']))
 try:
-    idx = int(sys.argv[1]) - 1
+    idx = int($choice) - 1
     if 0 <= idx < len(options):
         print(options[idx][0])
     else:
         print("ERROR")
 except:
     print("ERROR")
-sys.exit(0)
 PYTHON
-$(cat <<'ENDARGS'
-$choice
-ENDARGS
-)
     )
+
+    rm -f "$TEMP_JSON"
 
     if [ "$selected_res" = "ERROR" ] || [ -z "$selected_res" ]; then
         error "Invalid resolution selection"
     fi
 
     log "Selected resolution: $selected_res"
-
-    # Save headers for download script
-    HEADERS_FILE="/tmp/dash_headers_$$.json"
-    echo "$dash_info" | python3 -c "import sys, json; d=json.load(sys.stdin); [print(json.dumps(d['headers']))]" > "$HEADERS_FILE"
-
-    # Call download helper
-    bash "$(dirname "$0")/helper_dash.sh" -m "$mpd_content" -b "$manifest_base" -r "$selected_res" -H "$HEADERS_FILE"
-
-    # Cleanup
-    [ -f "$HEADERS_FILE" ] && rm -f "$HEADERS_FILE"
+    log "Note: DASH download feature is under development"
 }
 
 method_html() {
