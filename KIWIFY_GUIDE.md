@@ -1,152 +1,182 @@
 # Kiwify Video Download Guide
 
-## Quick Start
+## The One True Method: HAR Export ✅
 
-Choose the easiest method for you:
+The simplest and most reliable way to download Kiwify videos.
 
-### **Method 1: HAR File Export (Recommended - Easiest)**
+## Quick Start (5 minutes)
 
-No manual URL hunting. DevTools captures everything.
+### 1. Capture Video Traffic
 
-**Steps:**
-1. Open DevTools (`F12`)
-2. Go to **Network** tab
-3. **Clear the Network tab** (⊘ icon)
-4. **Play the video** (let it buffer for a few seconds while recording)
-5. Right-click in Network tab → **"Save all as HAR with content"**
-6. Save as `network.har`
+Open any Kiwify video in Chrome and capture the network traffic:
 
-**⚠️ Important:** HAR file captures auth tokens that expire quickly. Use the HAR file immediately after exporting.
-
-**Download:**
-```bash
-./download.sh --har network.har
+```
+1. Press F12 to open DevTools
+2. Click "Network" tab
+3. Click the circle (Record) button (if not already recording)
+4. Play the video for 30+ seconds
+5. Right-click in Network tab → "Save all as HAR with content"
+6. Save as: video.har
 ```
 
-The script will:
-- ✓ Find the m3u8 playlist automatically
-- ✓ Show available resolutions
-- ✓ Let you choose quality
-- ✓ Download all segments
-- ✓ Merge into MP4
-
----
-
-### **Method 2: HTML Video Element (Medium)**
-
-Copy the video element from page source.
-
-**Steps:**
-1. Open DevTools (`F12`)
-2. Go to **Elements/Inspector** tab
-3. Find `<video class="plyr">` element
-4. Right-click → **"Copy element"** (or parent div)
-5. Run command:
+### 2. Download the Video
 
 ```bash
-./download.sh --html '<paste_your_html_here>'
+./download.sh --har video.har
 ```
 
-**Note:** If blob URL doesn't work, you'll need to manually get the m3u8 URL from Network tab instead.
-
----
-
-## Workflow Comparison
-
-| Method | Effort | Reliability | Steps |
-|--------|--------|-------------|-------|
-| HAR Export | Minimal | Excellent | 5 clicks |
-| HTML Element | Low | Medium | 4 clicks + m3u8 hunt |
-| Direct URL | Very Low | Excellent | Copy/paste URL |
-
----
-
-## Video Resolution Selection
-
-After running any method, you'll see available resolutions:
+### 3. Choose Resolution
 
 ```
 Available Resolutions:
 =====================
-1. 1920x1080
-2. 1280x720
+1. 640x360
+2. 456x256
 3. 854x480
+4. 1280x720
+5. 1920x1080
 
-Choose resolution (1-3): 2
+Select resolution [1-5]: 3
 ```
 
-Pick your desired quality and the script handles everything else.
+That's it! The script will:
+- ✓ Download all segments
+- ✓ Use authentication headers from HAR
+- ✓ Merge into MP4 file
+- ✓ Save as `video_854x480.mp4`
 
 ---
 
-## Complete Examples
+## Why HAR Method?
 
-### Download 720p from HAR
+| Feature | Status |
+|---------|--------|
+| **Easiest** | ✅ 5 clicks, no manual work |
+| **Most Reliable** | ✅ Captures all auth automatically |
+| **Complete** | ✅ Gets all resolutions available |
+| **Fast** | ✅ No hunting for URLs |
+
+---
+
+## Complete Walkthrough
+
+### Step 1: Start Capture
+```
+Open Kiwify → Find video → Press F12 → Click Network tab
+```
+
+### Step 2: Record Traffic
+```
+Video plays → DevTools records all requests → 30+ seconds
+```
+
+### Step 3: Export HAR
+```
+Right-click Network → "Save all as HAR with content" → Save as network.har
+```
+
+### Step 4: Download
 ```bash
 ./download.sh --har network.har
-# Choose: 2 (for 720p)
 ```
 
-### Download 480p from HTML
+### Step 5: Choose Resolution
+```
+[Script shows options] → Type 3 (for 480p) → Enter
+[Script downloads and merges]
+```
+
+### Output
+```
+✓ video_854x480.mp4 ready!
+```
+
+---
+
+## Resolution Guide
+
+Choose based on your needs:
+
+| Option | Resolution | Quality | File Size |
+|--------|-----------|---------|-----------|
+| 1 | 640×360 | Low | Small |
+| 2 | 456×256 | Low-Mid | Small-Medium |
+| 3 | 854×480 | **Recommended** | Medium |
+| 4 | 1280×720 | High | Large |
+| 5 | 1920×1080 | Best | Very Large |
+
+**Recommendation:** 854×480 (option 3) is the best balance of quality and file size.
+
+---
+
+## Common Issues
+
+### "No HLS segments found in HAR"
+**Solution:** Make sure the video was actually playing when you captured the HAR. Try again:
+1. Open video page
+2. Start Network recording
+3. Play video for 30+ seconds
+4. Then export HAR
+
+### "Failed to download segments"
+**Solution:** HAR files expire quickly. Don't save them for later. Export a fresh HAR immediately before downloading.
+
+### "Only 1 or 2 resolutions showing"
+**Solution:** This is normal. Kiwify may not stream all resolutions. Download the best available option.
+
+### ffmpeg not found
 ```bash
-./download.sh --html '<video src="blob:..." class="plyr"></video>'
-# Choose: 3 (for 480p)
+# Install ffmpeg
+sudo apt-get install ffmpeg   # Ubuntu/Debian
+brew install ffmpeg           # macOS
 ```
 
-### Download with direct URL
+---
+
+## Important Notes
+
+⚠️ **HAR Files Contain Sensitive Data**
+- HAR files include auth tokens and cookies
+- Delete them after downloading (or they expire in hours)
+- Don't share HAR files with others
+
+⚠️ **Keep Video Page Open**
+- During capture, keep the video page active
+- Don't navigate away while recording
+
+⚠️ **30+ Seconds Recommended**
+- Short captures may miss all available resolutions
+- Play video for half a minute to be safe
+
+---
+
+## Tips & Tricks
+
+✅ **Fastest method:** HAR export (5 minutes start-to-finish)  
+✅ **Always use fresh HAR:** Export immediately before downloading  
+✅ **Check resolution options:** Different videos have different available qualities  
+✅ **480p is usually best:** Good balance of quality and speed  
+
+---
+
+## File Output
+
+Videos are automatically named by resolution:
+```
+video_640x360.mp4    → Low quality
+video_854x480.mp4    → Recommended
+video_1920x1080.mp4  → Best quality
+```
+
+Move to your videos folder:
 ```bash
-./download.sh --url "https://d3p.../playlist.m3u8"
+mv video_*.mp4 /path/to/videos/
 ```
 
 ---
 
-## Troubleshooting
+## That's It!
 
-**"No m3u8 playlist found in HAR file"**
-- Make sure video was actually playing during capture
-- Try capturing again while video is loading
+The HAR method handles everything automatically. No hunting for URLs, no manual configuration. Just capture, run, and select resolution.
 
-**"Failed to fetch m3u8 file"**
-- HAR file may be too old (blob URLs expire)
-- Export a fresh HAR while video is playing
-
-**"Only getting 1080p, want lower resolution"**
-- Use HAR method to auto-detect all available qualities
-- Script will let you choose
-
----
-
-## Output
-
-Videos are saved with resolution in filename:
-```
-video_1920x1080.mp4  (or)
-video_1280x720.mp4   (or)
-video_854x480.mp4
-```
-
-Move to permanent storage:
-```bash
-mv video_*.mp4 /mnt/e/temp/_08_Videos/
-```
-
----
-
-## Tips
-
-1. **Fastest method:** HAR export (automatic everything)
-2. **Most reliable:** When in doubt, use HAR method
-3. **Keep video page open:** If using HTML method
-4. **Fresh exports:** Don't use old HAR/HTML files (URLs expire)
-
----
-
-## Advanced: Manual URL Entry
-
-If none of the above work, you can manually find the m3u8:
-
-1. Open DevTools → Network tab
-2. Filter by `.m3u8`
-3. Play video and watch for requests
-4. Copy the m3u8 request URL
-5. Run: `./download.sh --url "<url>"`
+Enjoy your Kiwify videos! 🎬

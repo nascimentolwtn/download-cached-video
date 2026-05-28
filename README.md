@@ -1,160 +1,184 @@
-# Download Cached Video
+# Kiwify Video Downloader
 
-A utility to recover and preserve videos you've already watched from your browser's cache, saving them to your file system for permanent storage.
+Download HLS video streams from Kiwify using HAR files captured from Chrome DevTools.
 
-## Goal
+## Overview
 
-When you watch videos online through a web browser, the video files are typically cached locally on your computer for smooth playback. However, these cached files are usually temporary and can be deleted by the browser at any time. This project aims to:
+This tool allows you to:
+- 📹 Capture Kiwify video network traffic using Chrome DevTools
+- 💾 Save complete HAR (HTTP Archive) files with authentication headers
+- 🎬 Download all video segments at your preferred resolution
+- 🔗 Automatically merge segments into a single MP4 file
 
-- **Locate** video files stored in your browser's cache directory
-- **Extract** these cached videos to prevent them from being lost
-- **Organize** and move them to a permanent location (e.g., Downloads folder)
+## Quick Start
 
-## Why?
+### 1. Capture Video in Chrome DevTools
 
-- **Preserve content** you want to keep but may lose if the cache is cleared
-- **Save bandwidth** by using existing cached files instead of re-downloading
-- **Backup videos** from sources that may have restrictions on downloads
-- **Organize media** in your file system for easy access
-
-## Use Cases
-
-- Save educational videos you've watched and want to reference later
-- Create backups of video content before cache cleanup
-
-## Architecture
-
-The project uses a modular approach combining **Bash** and **Python**:
-
-- **`config.sh`** - Centralized configuration (paths, file types, constraints)
-- **`find_videos.sh`** - Scans Brave cache for video files using magic byte detection
-- **`move_videos.sh`** - Safely moves videos with deduplication
-- **`detect_video.py`** - Python utility for intelligent file type detection
-- **`run.sh`** - Main orchestration script
-
-## Installation
-
-### Requirements
-- WSL2 with Ubuntu
-- Bash 4+
-- Basic utilities: `find`, `file`, `stat`
-- Python 3.6+ (optional, for enhanced detection)
-
-### Setup
-
-1. Clone or download this repository:
 ```bash
-cd ~/git/download-cached-video
+# On Kiwify member page:
+1. Open DevTools (F12)
+2. Go to Network tab
+3. Play the video (30+ seconds recommended)
+4. Right-click in Network tab → Save all as HAR
+5. Save file as: video.har
 ```
 
-2. Make scripts executable:
+### 2. Download Video
+
 ```bash
-chmod +x run.sh find_videos.sh move_videos.sh
-chmod +x detect_video.py
+./download.sh --har /path/to/video.har
 ```
 
-3. Edit `config.sh` if your paths differ:
-```bash
-nano config.sh
+Select your preferred resolution:
+```
+Available Resolutions:
+=====================
+1. 640x360
+2. 456x256
+3. 854x480
+4. 1280x720
+5. 1920x1080
+
+Select resolution [1-5]: 3
 ```
 
-## Usage
+Script will:
+- ✓ Download all segments
+- ✓ Extract authentication from HAR
+- ✓ Merge into MP4 file
+- ✓ Show video information
 
-### Quick Start (Recommended)
+### 3. Output
+
+Video saved as: `video_854x480.mp4` (or your selected resolution)
+
+## Requirements
+
+- **Chrome/Brave/Edge** (for DevTools HAR capture)
+- **curl** (for downloading segments)
+- **ffmpeg** (for merging segments)
+- **Python 3** (for header parsing)
+- **jq** (for JSON processing)
+
+### Install Dependencies
+
+**Linux:**
 ```bash
-./run.sh all
+sudo apt-get install curl ffmpeg python3 jq
 ```
-This finds and moves all videos in one command.
 
-### Step-by-Step
-
-**1. Find videos:**
+**macOS:**
 ```bash
-./run.sh find
-```
-This scans the Brave cache and lists all found video files.
-
-**2. Review results:**
-Results are saved in `/tmp/brave_video_cache/found_videos.txt`. Review before moving.
-
-**3. Move videos:**
-```bash
-./run.sh move
-```
-Copies found videos to `/mnt/e/temp/_08_Videos`
-
-### Other Commands
-```bash
-./run.sh config    # Show current configuration
-./run.sh clean     # Clean temporary files
-./run.sh help      # Show help
+brew install curl ffmpeg python3 jq
 ```
 
 ## How It Works
 
-1. **Finding:** Searches Brave cache directory for files with video extensions (.mp4, .webm, .m4s, .ts, .mkv)
-2. **Detection:** Verifies files are actually videos using:
-   - Magic byte analysis (file signatures)
-   - `file` command for additional verification
-   - Optional ffprobe for detailed inspection
-3. **Moving:** Safely copies videos with:
-   - Unique naming to avoid duplicates
-   - Size validation (skip files too small or too large)
-   - Error handling and logging
+1. **HAR Capture** - Chrome DevTools saves all network traffic including:
+   - Video segment URLs
+   - Authentication headers
+   - Cookie information
+   
+2. **Parsing** - Script extracts:
+   - Master playlist from HAR
+   - Available resolutions
+   - Segment URLs and ranges
 
-## Configuration
+3. **Downloading** - Downloads all segments using:
+   - Original auth headers from HAR
+   - Cookies for authenticated access
+   
+4. **Merging** - Uses ffmpeg to combine segments:
+   - Preserves video quality
+   - Creates standard MP4 file
 
-Edit `config.sh` to customize:
+## File Structure
 
-```bash
-# Brave cache path (Windows mounted in WSL)
-BRAVE_CACHE_PATH="/mnt/c/Users/lw_na/AppData/Local/BraveSoftware/Brave-Browser/User Data/Default"
-
-# Where to save recovered videos
-DESTINATION_PATH="/mnt/e/temp/_08_Videos"
-
-# Minimum file size to consider (MB)
-MIN_FILE_SIZE=1
-
-# Maximum file size (0 = no limit)
-MAX_FILE_SIZE=0
-
-# Enable verbose logging
-VERBOSE=true
+```
+.
+├── download.sh              # Main download script
+├── README.md               # This file
+└── hls_download_*/         # Temporary segment directories
+    ├── [segments].ts       # Video segment files
+    └── concat.txt          # ffmpeg concat playlist
 ```
 
-## Security & Safety
+## Features
 
-- ✅ Read-only scanning (doesn't modify cache)
-- ✅ Copies files instead of moving (preserves cache)
-- ✅ Deduplication (won't re-save the same file)
-- ✅ Size validation (filters corrupted files)
-- ✅ Comprehensive error handling and logging
+✅ **Complete HAR Support** - Works with full Chrome DevTools HAR files  
+✅ **Multiple Resolutions** - Download at quality you prefer  
+✅ **Authentication** - Automatically uses headers from HAR  
+✅ **Quality Verification** - Shows final video information  
+✅ **Cleanup Options** - Automatic removal of temp files  
+✅ **Error Handling** - Robust segment validation  
 
 ## Troubleshooting
 
-**"Brave cache path not found"**
-- Verify the path in `config.sh` exists on your Windows system
-- Check that Brave has cached data there
+### "No HLS segments found"
+- Ensure video actually played in DevTools during capture
+- Play video for at least 30 seconds before capturing HAR
 
-**"No video files found"**
-- Ensure you've watched videos in Brave (they need to be cached)
-- Increase `MIN_FILE_SIZE` or check cache manually
+### "Failed to download segments"
+- HAR file may be too old (auth tokens expire)
+- Capture a fresh HAR file
+- Check internet connection
 
-**"Permission denied"**
-- Ensure destination directory is writable
-- May need to run with appropriate permissions for NTFS mounts
+### "ffmpeg not found"
+```bash
+# Install ffmpeg
+sudo apt-get install ffmpeg  # Linux
+brew install ffmpeg          # macOS
+```
 
-## Supported Browsers
+### "jq not found"
+```bash
+# Install jq
+sudo apt-get install jq      # Linux
+brew install jq              # macOS
+```
 
-Currently supports:
-- **Brave** (primary)
-- Can be adapted for Chrome (same cache structure)
+## Limitations
 
-## Future Enhancements
+- ⚠️ Kiwify member account required
+- ⚠️ HAR files expire (re-capture if download fails)
+- ⚠️ Only HLS video streams supported
+- ⚠️ Video resolution depends on what's streamed
 
-- GUI interface for easier operation
-- Video metadata preservation (title, timestamp)
-- Integration with video organization tools
-- Batch scheduling for automatic extraction
-- Support for other browsers (Firefox, Edge, Safari)
+## Usage Examples
+
+### Download 480p (854x480) resolution
+```bash
+./download.sh --har video.har
+# Select option 3
+```
+
+### Download highest quality (1920x1080)
+```bash
+./download.sh --har video.har
+# Select option 5
+```
+
+### Download to custom filename
+The script auto-names based on resolution, e.g:
+- `video_456x256.mp4` (456x256)
+- `video_854x480.mp4` (854x480)  
+- `video_1920x1080.mp4` (1920x1080)
+
+## Legal Notice
+
+This tool is for personal use only. Respect:
+- Content creator rights
+- Kiwify terms of service
+- Local copyright laws
+
+## Support
+
+For issues:
+1. Verify Chrome DevTools HAR capture worked
+2. Check that ffmpeg/curl are installed
+3. Try capturing a fresh HAR file
+4. Verify internet connection
+
+## License
+
+Personal use only
