@@ -12,15 +12,15 @@ error() {
     exit 1
 }
 
-# Parse command line arguments
-mpd_content=""
+# Parse arguments
+mpd_file=""
 manifest_base=""
 selected_res=""
 headers_file=""
 
 while getopts "m:b:r:H:" opt; do
     case $opt in
-        m) mpd_content="$OPTARG" ;;
+        m) mpd_file="$OPTARG" ;;
         b) manifest_base="$OPTARG" ;;
         r) selected_res="$OPTARG" ;;
         H) headers_file="$OPTARG" ;;
@@ -28,8 +28,16 @@ while getopts "m:b:r:H:" opt; do
     esac
 done
 
-if [ -z "$mpd_content" ] || [ -z "$manifest_base" ] || [ -z "$selected_res" ]; then
+if [ -z "$mpd_file" ] || [ -z "$manifest_base" ] || [ -z "$selected_res" ]; then
     error "Missing required parameters"
+fi
+
+# Get script directory and original directory BEFORE changing directories
+script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+original_dir="$PWD"
+
+if [ ! -f "$mpd_file" ]; then
+    error "MPD manifest file not found: $mpd_file"
 fi
 
 # Create working directory
@@ -39,200 +47,134 @@ cd "$work_dir"
 
 log "Working directory: $work_dir"
 
-# Parse DASH manifest and extract segment URLs
-segment_info=$(python3 << 'PYTHON'
-import xml.etree.ElementTree as ET
-import json
-import sys
+# Extract segment URLs
+log "Parsing DASH manifest..."
+python3 "$script_dir/parse_dash_manifest.py" "$mpd_file" "$manifest_base" "$selected_res" > segments.txt
 
-mpd_content = sys.argv[1]
-manifest_base = sys.argv[2]
-selected_res = sys.argv[3]
-
-try:
-    root = ET.fromstring(mpd_content)
-except ET.ParseError as e:
-    print(json.dumps({"error": str(e)}))
-    sys.exit(1)
-
-ns = {'dash': 'urn:mpeg:dash:schema:mpd:2011'}
-
-# Extract video and audio segments for selected resolution
-video_segments = []
-audio_segments = []
-
-for adapt_set in root.findall('.//dash:AdaptationSet', ns):
-    mime_type = adapt_set.get('mimeType', '')
-
-    for rep in adapt_set.findall('dash:Representation', ns):
-        width = rep.get('width')
-        height = rep.get('height')
-        rep_id = rep.get('id', '')
-
-        # Video representation matching selected resolution
-        if width and height:
-            res_key = f"{width}x{height}"
-            if res_key == selected_res:
-                seg_template = rep.find('dash:SegmentTemplate', ns)
-                if seg_template is not None:
-                    media_pattern = seg_template.get('media', '')
-                    init_pattern = seg_template.get('initialization', '')
-
-                    # Add init segment
-                    if init_pattern:
-                        init_url = init_pattern.replace('$RepresentationID$', rep_id)
-                        video_segments.append(manifest_base + init_url)
-
-                    # Add numbered segments
-                    segs = rep.findall('dash:SegmentTimeline/dash:S', ns)
-                    for i in range(len(segs)):
-                        seg_url = media_pattern.replace('$Number$', str(i+1))
-                        seg_url = seg_url.replace('$RepresentationID$', rep_id)
-                        video_segments.append(manifest_base + seg_url)
-
-        # Audio representation
-        elif 'audio' in mime_type:
-            seg_template = rep.find('dash:SegmentTemplate', ns)
-            if seg_template is not None:
-                media_pattern = seg_template.get('media', '')
-                init_pattern = seg_template.get('initialization', '')
-
-                # Add init segment
-                if init_pattern:
-                    init_url = init_pattern.replace('$RepresentationID$', rep_id)
-                    audio_segments.append(manifest_base + init_url)
-
-                # Add numbered segments
-                segs = rep.findall('dash:SegmentTimeline/dash:S', ns)
-                for i in range(len(segs)):
-                    seg_url = media_pattern.replace('$Number$', str(i+1))
-                    seg_url = seg_url.replace('$RepresentationID$', rep_id)
-                    audio_segments.append(manifest_base + seg_url)
-
-output = {
-    'video': video_segments,
-    'audio': audio_segments,
-}
-
-print(json.dumps(output))
-PYTHON
-$(cat <<'ENDARGS'
-$mpd_content
-$manifest_base
-$selected_res
-ENDARGS
-)
-)
-
-# Check for errors
-if echo "$segment_info" | grep -q '"error"'; then
-    error "Failed to parse DASH manifest"
+if [ ! -s segments.txt ]; then
+    error "No segments found in manifest"
 fi
 
-# Extract segment lists
-video_segments=$(echo "$segment_info" | python3 -c "import sys, json; d=json.load(sys.stdin); print('\\n'.join(d.get('video', [])))")
-audio_segments=$(echo "$segment_info" | python3 -c "import sys, json; d=json.load(sys.stdin); print('\\n'.join(d.get('audio', [])))")
+# Parse segment list
+video_urls=()
+audio_urls=()
 
-if [ -z "$video_segments" ]; then
-    error "No video segments found in manifest"
-fi
+while IFS= read -r line; do
+    if [[ "$line" == V:* ]]; then
+        video_urls+=("${line:2}")
+    elif [[ "$line" == A:* ]]; then
+        audio_urls+=("${line:2}")
+    fi
+done < segments.txt
 
-log "Found video segments to download"
-[ -n "$audio_segments" ] && log "Found audio segments to download"
+log "Found ${#video_urls[@]} video segments, ${#audio_urls[@]} audio segments"
 
 # Download video segments
 log "Downloading video segments..."
 mkdir -p video
-video_count=0
-while IFS= read -r url; do
-    [ -z "$url" ] && continue
-    video_count=$((video_count + 1))
-    output_file="video/seg_${video_count}.mp4"
+
+for i in "${!video_urls[@]}"; do
+    url="${video_urls[$i]}"
+    idx=$((i + 1))
+    output_file="video/seg_${idx}.mp4"
 
     echo -n "."
 
-    # Build curl command with headers
     if [ -f "$headers_file" ]; then
-        python3 << ENDCURL
+        # Download with headers
+        python3 << PYCURL
 import json
+import subprocess
+
 with open('$headers_file') as f:
     headers = json.load(f)
-cmd = 'curl -s -L -m 30'
+
+cmd = ['curl', '-s', '-L', '-m', '30', '--compressed']
 for k, v in headers.items():
-    cmd += f' -H "{k}: {v}"'
-cmd += f' -o "{output_file}" "{url}"'
-with open('/tmp/curl_cmd', 'w') as f:
-    f.write(cmd)
-ENDCURL
-        bash /tmp/curl_cmd
+    cmd.extend(['-H', f'{k}: {v}'])
+cmd.extend(['-o', '$output_file', '$url'])
+
+subprocess.run(cmd, check=False)
+PYCURL
     else
-        curl -s -L -m 30 -o "$output_file" "$url"
+        curl -s -L -m 30 --compressed -o "$output_file" "$url" 2>/dev/null || true
     fi
-done <<< "$video_segments"
+done
 echo ""
 
-log "Downloaded $video_count video segments"
-
 # Download audio segments if present
-if [ -n "$audio_segments" ]; then
+if [ ${#audio_urls[@]} -gt 0 ]; then
     log "Downloading audio segments..."
     mkdir -p audio
-    audio_count=0
-    while IFS= read -r url; do
-        [ -z "$url" ] && continue
-        audio_count=$((audio_count + 1))
-        output_file="audio/seg_${audio_count}.mp4"
+
+    for i in "${!audio_urls[@]}"; do
+        url="${audio_urls[$i]}"
+        idx=$((i + 1))
+        output_file="audio/seg_${idx}.mp4"
 
         echo -n "."
 
         if [ -f "$headers_file" ]; then
-            python3 << ENDCURL
+            python3 << PYCURL
 import json
+import subprocess
+
 with open('$headers_file') as f:
     headers = json.load(f)
-cmd = 'curl -s -L -m 30'
+
+cmd = ['curl', '-s', '-L', '-m', '30', '--compressed']
 for k, v in headers.items():
-    cmd += f' -H "{k}: {v}"'
-cmd += f' -o "{output_file}" "{url}"'
-with open('/tmp/curl_cmd', 'w') as f:
-    f.write(cmd)
-ENDCURL
-            bash /tmp/curl_cmd
+    cmd.extend(['-H', f'{k}: {v}'])
+cmd.extend(['-o', '$output_file', '$url'])
+
+subprocess.run(cmd, check=False)
+PYCURL
         else
-            curl -s -L -m 30 -o "$output_file" "$url"
+            curl -s -L -m 30 --compressed -o "$output_file" "$url" 2>/dev/null || true
         fi
-    done <<< "$audio_segments"
+    done
     echo ""
-    log "Downloaded $audio_count audio segments"
 fi
 
-# Merge segments with ffmpeg
+# Merge with ffmpeg
 log "Merging segments with ffmpeg..."
 
-# Create concat demuxer file for video
-echo "Creating ffmpeg concat file..."
-ls -1 video/seg_*.mp4 | while read f; do echo "file '$work_dir/$f'"; done > concat_video.txt
+# Create concat file for video
+find video -name "seg_*.mp4" -type f | sort -V | while read f; do
+    echo "file '$work_dir/$f'"
+done > concat_video.txt
 
-# Create concat file for audio if it exists
-if [ -d audio ] && [ -n "$(ls audio/seg_*.mp4 2>/dev/null)" ]; then
-    ls -1 audio/seg_*.mp4 | while read f; do echo "file '$work_dir/$f'"; done > concat_audio.txt
+if [ -d audio ] && [ -f audio/seg_1.mp4 ]; then
+    # Create concat file for audio
+    find audio -name "seg_*.mp4" -type f | sort -V | while read f; do
+        echo "file '$work_dir/$f'"
+    done > concat_audio.txt
+
     log "Remuxing video and audio..."
-    ffmpeg -f concat -safe 0 -i concat_video.txt -f concat -safe 0 -i concat_audio.txt -c copy -map 0 -map 1 "video_${selected_res}.mp4" > /dev/null 2>&1
+    ffmpeg -f concat -safe 0 -i concat_video.txt -f concat -safe 0 -i concat_audio.txt -c copy -map 0 -map 1 "video_${selected_res}.mp4" 2>/dev/null
 else
     log "Concatenating video only..."
-    ffmpeg -f concat -safe 0 -i concat_video.txt -c copy "video_${selected_res}.mp4" > /dev/null 2>&1
+    ffmpeg -f concat -safe 0 -i concat_video.txt -c copy "video_${selected_res}.mp4" 2>/dev/null
 fi
 
+# Output file location
 if [ -f "video_${selected_res}.mp4" ]; then
-    log "✓ Video saved: video_${selected_res}.mp4"
-    # Move to original directory
-    mv "video_${selected_res}.mp4" -
-    pwd
+    log "✓ Video merged successfully"
+    # Try to move to original directory
+    if mv "video_${selected_res}.mp4" "$original_dir/" 2>/dev/null; then
+        final_output="$original_dir/video_${selected_res}.mp4"
+        log "✓ Output saved: video_${selected_res}.mp4"
+    else
+        final_output="$work_dir/video_${selected_res}.mp4"
+        log "⚠ Output left in: $final_output"
+    fi
 else
     error "Failed to create output video"
 fi
 
 # Cleanup
-cd - > /dev/null
+cd "$original_dir"
 log "Cleaning up temporary files..."
 rm -rf "$work_dir"
+
+log "✓ Download complete!"
