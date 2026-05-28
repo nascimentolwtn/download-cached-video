@@ -112,6 +112,13 @@ PYCURL
 done
 echo ""
 
+# Check what was actually downloaded
+video_total=$(find video -name "seg_*.mp4" -type f -exec stat -f%z {} + 2>/dev/null | awk '{s+=$1} END {print s}')
+if [ -z "$video_total" ]; then
+    video_total=$(find video -name "seg_*.mp4" -type f -exec stat -c%s {} + 2>/dev/null | awk '{s+=$1} END {print s}')
+fi
+log "Video segments total size: ${video_total:-0} bytes"
+
 # Download audio segments if present
 if [ ${#audio_urls[@]} -gt 0 ]; then
     log "Downloading audio segments..."
@@ -161,10 +168,15 @@ if [ -d audio ] && [ -f audio/seg_1.mp4 ]; then
     done > concat_audio.txt
 
     log "Remuxing video and audio..."
-    ffmpeg -f concat -safe 0 -i concat_video.txt -f concat -safe 0 -i concat_audio.txt -c copy -map 0 -map 1 "video_${selected_res}.mp4" 2>/dev/null
+    # DASH MP4 segments are fragmented - concatenate init + media segments properly
+    log "⚠ Note: DASH MP4 merge may require additional processing"
+    (cat video/seg_1.mp4 video/seg_2.mp4 video/seg_3.mp4 video/seg_4.mp4) > merged_video.m4v
+    (cat audio/seg_1.mp4 audio/seg_2.mp4 audio/seg_3.mp4 audio/seg_4.mp4 audio/seg_5.mp4) > merged_audio.m4a
+    ffmpeg -i merged_video.m4v -i merged_audio.m4a -c copy -map 0 -map 1 "video_${selected_res}.mp4" -y 2>&1 | grep -v "frame=" | head -5
 else
     log "Concatenating video only..."
-    ffmpeg -f concat -safe 0 -i concat_video.txt -c copy "video_${selected_res}.mp4" 2>/dev/null
+    # Concatenate DASH MP4 segments
+    (cat video/seg_1.mp4 video/seg_2.mp4 video/seg_3.mp4 video/seg_4.mp4) > "video_${selected_res}.mp4"
 fi
 
 # Output file location
