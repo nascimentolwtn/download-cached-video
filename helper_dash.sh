@@ -17,19 +17,28 @@ mpd_file=""
 manifest_base=""
 selected_res=""
 headers_file=""
+output_dir=""
 
-while getopts "m:b:r:H:" opt; do
+while getopts "m:b:r:H:o:" opt; do
     case $opt in
         m) mpd_file="$OPTARG" ;;
         b) manifest_base="$OPTARG" ;;
         r) selected_res="$OPTARG" ;;
         H) headers_file="$OPTARG" ;;
+        o) output_dir="$OPTARG" ;;
         *) error "Unknown option: -$OPTARG" ;;
     esac
 done
 
 if [ -z "$mpd_file" ] || [ -z "$manifest_base" ] || [ -z "$selected_res" ]; then
     error "Missing required parameters"
+fi
+
+# Ensure output directory exists
+if [ -n "$output_dir" ]; then
+    mkdir -p "$output_dir"
+else
+    output_dir="."
 fi
 
 # Get script directory and original directory BEFORE changing directories
@@ -160,13 +169,22 @@ fi
 # Output file location
 if [ -f "video_${selected_res}.mp4" ]; then
     log "✓ Video merged successfully"
-    # Try to move to original directory
-    if mv "video_${selected_res}.mp4" "$original_dir/" 2>/dev/null; then
-        final_output="$original_dir/video_${selected_res}.mp4"
-        log "✓ Output saved: video_${selected_res}.mp4"
+
+    # Determine final output path
+    if [[ "$output_dir" = /* ]]; then
+        # Absolute path
+        final_path="$output_dir/video_${selected_res}.mp4"
     else
-        final_output="$work_dir/video_${selected_res}.mp4"
-        log "⚠ Output left in: $final_output"
+        # Relative path - make it relative to original directory
+        final_path="$original_dir/$output_dir/video_${selected_res}.mp4"
+    fi
+
+    # Move to output directory
+    mkdir -p "$(dirname "$final_path")"
+    if mv "video_${selected_res}.mp4" "$final_path" 2>/dev/null; then
+        log "✓ Output saved: $output_dir/video_${selected_res}.mp4"
+    else
+        log "⚠ Output left in: $work_dir/video_${selected_res}.mp4"
     fi
 else
     error "Failed to create output video"

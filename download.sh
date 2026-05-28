@@ -365,12 +365,15 @@ PYTHON
 
     rm -f "$TEMP_JSON"
 
+    # Ensure videos folder exists
+    mkdir -p videos
+
     # Save headers for download script
     HEADERS_FILE="/tmp/dash_headers_$$.json"
     echo "$headers" > "$HEADERS_FILE"
 
     # Call DASH download helper
-    bash "$(dirname "$0")/helper_dash.sh" -m "$MPD_FILE" -b "$manifest_base" -r "$selected_res" -H "$HEADERS_FILE"
+    bash "$(dirname "$0")/helper_dash.sh" -m "$MPD_FILE" -b "$manifest_base" -r "$selected_res" -H "$HEADERS_FILE" -o "videos"
 
     # Cleanup
     [ -f "$HEADERS_FILE" ] && rm -f "$HEADERS_FILE"
@@ -561,8 +564,11 @@ download_direct() {
     # Now use the main download script
     cd - > /dev/null
 
+    # Ensure videos folder exists
+    mkdir -p videos
+
     # Build command with optional headers
-    local cmd="bash \"$(dirname "$0")/helper_hls.sh\" -u \"$base_url\" -p \"$prefix\" -s \"$first_num\" -e \"$last_num\" -o \"video_${resolution}.mp4\""
+    local cmd="bash \"$(dirname "$0")/helper_hls.sh\" -u \"$base_url\" -p \"$prefix\" -s \"$first_num\" -e \"$last_num\" -o \"videos/video_${resolution}.mp4\""
     if [ -n "$headers_file" ] && [ -f "$headers_file" ]; then
         cmd="$cmd -H \"$headers_file\""
     fi
