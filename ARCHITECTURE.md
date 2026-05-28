@@ -6,9 +6,10 @@
 
 | File | Purpose | Required |
 |------|---------|----------|
-| **download.sh** | Main entry point, parses HAR files, detects resolutions, orchestrates download | ✅ YES |
-| **download_hls.sh** | Helper script called by download.sh, downloads segments and merges with ffmpeg | ✅ YES |
-| **extract_headers_from_har.py** | Helper script called by download.sh, extracts auth headers from HAR | ✅ YES |
+| **download.sh** | Main entry point, auto-detects HLS/DASH, parses files, orchestrates download | ✅ YES |
+| **helper_hls.sh** | Downloads HLS segments and merges with ffmpeg (called by download.sh) | ✅ YES (for HLS) |
+| **helper_dash.sh** | Downloads DASH segments and remuxes with ffmpeg (called by download.sh) | ✅ YES (for DASH) |
+| **extract_headers_from_har.py** | Extracts auth headers from HAR for curl (called by download.sh) | ✅ YES |
 
 ### Documentation
 
@@ -25,30 +26,39 @@
 ### User Workflow
 
 ```
-1. User captures HAR from Chrome DevTools
+1. User captures HAR from Chrome DevTools (30+ seconds of playback)
               ↓
 2. User runs: ./download.sh --har file.har
               ↓
-3. download.sh processes HAR:
-   - Extracts m3u8 playlist URLs
-   - Extracts auth headers via extract_headers_from_har.py
-   - Parses master playlist for available resolutions
-   - Shows user resolution options
+3. download.sh detects stream type:
+   - Scans HAR for .m3u8 (HLS) or .mpd (DASH)
+   - Routes to appropriate handler
               ↓
-4. User selects resolution (1-5)
-              ↓
-5. download.sh calls download_hls.sh:
-   - Base URL
-   - Segment prefix
-   - Segment range (first-last)
-   - Auth headers
-              ↓
-6. download_hls.sh:
-   - Downloads all segments
-   - Creates ffmpeg concat file
-   - Merges segments into MP4
-              ↓
-7. Output: video_854x480.mp4 (or selected resolution)
+   [HLS Path - Kiwify]              [DASH Path - Finclass]
+   
+4a. Extract m3u8 URLs              4b. Extract DASH manifest
+    Get auth headers                   Parse resolution options
+    Fetch master playlist              Show available resolutions
+    Parse resolutions
+    Show options
+              ↓                         ↓
+5. User selects resolution (1-5)
+              ↓                         ↓
+6a. Call helper_hls.sh:            6b. Call helper_dash.sh:
+    - Base URL                         - MPD manifest content
+    - Segment prefix                   - Selected resolution
+    - Segment range                    - Auth headers
+    - Auth headers
+              ↓                         ↓
+7. Download phase:
+   - Download all .ts segments      - Download video segments
+   - Create concat playlist         - Download audio segments
+   - Merge with ffmpeg             - Create concat playlists
+                  ↓                     ↓
+              Merge with ffmpeg
+              (separate audio track)
+              ↓                         ↓
+8. Output: video_854x480.mp4 (or selected resolution)
 ```
 
 ---
@@ -56,14 +66,21 @@
 ## Script Dependencies
 
 ```
-download.sh
-  ├── Calls: extract_headers_from_har.py
-  │   └── Purpose: Extract auth headers from HAR
+download.sh (entry point)
+  ├── Detects stream type (HLS or DASH)
   │
-  └── Calls: download_hls.sh
-      ├── Uses: curl (downloads segments)
-      ├── Uses: ffmpeg (merges segments)
-      └── Uses: Python (header building)
+  ├── For HLS (Kiwify):
+  │   ├── Calls: extract_headers_from_har.py → headers.json
+  │   └── Calls: helper_hls.sh
+  │       ├── Uses: curl (downloads .ts segments)
+  │       ├── Uses: ffmpeg (merges segments)
+  │       └── Uses: Python (header building)
+  │
+  └── For DASH (Finclass):
+      └── Calls: helper_dash.sh
+          ├── Uses: curl (downloads segments)
+          ├── Uses: ffmpeg (remuxes video + audio)
+          └── Uses: Python (manifest parsing & header building)
 ```
 
 ---

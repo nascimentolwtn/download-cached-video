@@ -1,5 +1,5 @@
 #!/bin/bash
-# Unified Kiwify video downloader - supports HAR or HTML input
+# Unified video downloader - supports HLS (Kiwify) and DASH (Finclass) via HAR export
 
 set -o pipefail
 
@@ -14,15 +14,15 @@ error() {
 
 print_usage() {
     cat << EOF
-Kiwify Video Downloader - Automatic Resolution Selection
+Video Downloader - HLS & DASH Support (Kiwify, Finclass, etc.)
 
 USAGE:
-  $0 --har <file.har>              Extract m3u8 from DevTools HAR export
+  $0 --har <file.har>              Auto-detect and download HLS or DASH stream
   $0 --html '<video>...</video>'   Extract m3u8 from HTML video element
   $0 --url <m3u8_url>              Direct m3u8 playlist URL
 
 EXAMPLES:
-  # From HAR file
+  # From HAR file (auto-detects HLS or DASH)
   $0 --har network.har
 
   # From HTML (copy from page source)
@@ -31,18 +31,17 @@ EXAMPLES:
   # Direct URL
   $0 --url "https://example.com/playlist.m3u8"
 
-HOW TO GET HAR FILE:
-  1. Open DevTools (F12)
-  2. Network tab
-  3. Right-click → Save all as HAR with content
-  4. Run: $0 --har <saved_file>
+SUPPORTED PLATFORMS:
+  ✓ Kiwify (HLS streaming)
+  ✓ Finclass (DASH streaming)
+  ✓ Other platforms using HLS or DASH
 
-HOW TO GET HTML ELEMENT:
-  1. Open DevTools (F12)
-  2. Elements/Inspector tab
-  3. Find <video> element with the player
-  4. Right-click → Copy element
-  5. Run: $0 --html '<paste_here>'
+HOW TO GET HAR FILE:
+  1. Open video in Chrome
+  2. Press F12 → Network tab
+  3. Play video for 30+ seconds
+  4. Right-click → Save all as HAR with content
+  5. Run: $0 --har <saved_file>
 EOF
 }
 
@@ -53,7 +52,62 @@ method_har() {
         error "HAR file not found: $har_file"
     fi
 
-    log "Extracting m3u8 from HAR file: $har_file"
+    log "Analyzing HAR file: $har_file"
+
+    # Detect whether it's HLS (m3u8) or DASH (mpd)
+    stream_type=$(python3 << PYTHON
+import json
+import sys
+
+try:
+    with open("$har_file", 'r') as f:
+        har_data = json.load(f)
+except:
+    print("unknown")
+    sys.exit(1)
+
+entries = har_data.get('log', {}).get('entries', [])
+
+has_m3u8 = False
+has_mpd = False
+
+for entry in entries:
+    url = entry.get('request', {}).get('url', '')
+    mime_type = entry.get('response', {}).get('content', {}).get('mimeType', '')
+
+    if '.m3u8' in url or 'application/vnd.apple.mpegurl' in mime_type:
+        has_m3u8 = True
+    if '.mpd' in url or 'application/dash' in mime_type:
+        has_mpd = True
+
+if has_mpd:
+    print("dash")
+elif has_m3u8:
+    print("hls")
+else:
+    print("unknown")
+PYTHON
+    )
+
+    case "$stream_type" in
+        hls)
+            log "Detected HLS stream (Kiwify-type)"
+            method_har_hls "$har_file"
+            ;;
+        dash)
+            log "Detected DASH stream (Finclass-type)"
+            method_har_dash "$har_file"
+            ;;
+        *)
+            error "Could not detect stream type. No m3u8 or mpd found in HAR file."
+            ;;
+    esac
+}
+
+method_har_hls() {
+    local har_file="$1"
+
+    log "Extracting m3u8 from HAR file"
 
     # Extract headers for authentication
     HEADERS_FILE="/tmp/har_headers_$$.json"
@@ -140,6 +194,176 @@ PYTHON
     fi
 
     download_with_resolution_selection "$m3u8_url" "auto" "$HEADERS_FILE"
+
+    # Cleanup
+    [ -f "$HEADERS_FILE" ] && rm -f "$HEADERS_FILE"
+}
+
+method_har_dash() {
+    local har_file="$1"
+
+    log "Extracting DASH manifest from HAR file"
+
+    # Extract headers and manifest info
+    dash_info=$(python3 << 'PYTHON'
+import json
+import sys
+import xml.etree.ElementTree as ET
+
+har_file = sys.argv[1]
+
+try:
+    with open(har_file) as f:
+        har = json.load(f)
+except Exception as e:
+    print(json.dumps({"error": str(e)}))
+    sys.exit(1)
+
+mpd_content = None
+mpd_url = None
+headers = {}
+
+# Extract manifest and headers
+for entry in har['log']['entries']:
+    url = entry['request'].get('url', '')
+
+    # Collect headers from video/cdn requests
+    if any(x in url.lower() for x in ['cloudfront', 'cdn', 'dash']):
+        for h in entry['request'].get('headers', []):
+            name = h['name'].lower()
+            if name in ['user-agent', 'referer', 'authorization', 'cookie']:
+                headers[h['name']] = h['value']
+
+    # Find MPD manifest
+    if '.mpd' in url.lower():
+        mpd_url = url
+        resp = entry.get('response', {})
+        if resp.get('content', {}).get('text'):
+            mpd_content = resp['content']['text']
+
+if not mpd_content:
+    print(json.dumps({"error": "No DASH manifest found"}))
+    sys.exit(1)
+
+# Parse manifest to extract video representations
+try:
+    root = ET.fromstring(mpd_content)
+except ET.ParseError as e:
+    print(json.dumps({"error": f"Failed to parse manifest: {e}"}))
+    sys.exit(1)
+
+ns = {'dash': 'urn:mpeg:dash:schema:mpd:2011'}
+
+# Find video resolutions
+video_reps = {}
+audio_info = {}
+
+for adapt_set in root.findall('.//dash:AdaptationSet', ns):
+    mime_type = adapt_set.get('mimeType', '')
+
+    for rep in adapt_set.findall('dash:Representation', ns):
+        width = rep.get('width')
+        height = rep.get('height')
+        rep_id = rep.get('id', '')
+
+        # Store video representation info
+        if width and height:
+            res_key = f"{width}x{height}"
+            video_reps[res_key] = {
+                'id': rep_id,
+                'width': width,
+                'height': height,
+                'bandwidth': rep.get('bandwidth'),
+            }
+
+        # Store audio representation info
+        elif 'audio' in mime_type:
+            audio_info[rep_id] = {
+                'id': rep_id,
+                'bandwidth': rep.get('bandwidth'),
+            }
+
+# Get manifest base URL
+manifest_base = '/'.join(mpd_url.split('/')[:-1]) + '/' if mpd_url else ''
+
+print(json.dumps({
+    'mpd_url': mpd_url,
+    'mpd_content': mpd_content,
+    'manifest_base': manifest_base,
+    'video_reps': video_reps,
+    'audio_info': audio_info,
+    'headers': headers,
+}))
+sys.exit(0)
+PYTHON
+$(cat <<'ENDARGS'
+$har_file
+ENDARGS
+)
+    )
+
+    error_check=$(echo "$dash_info" | python3 -c "import sys, json; d=json.load(sys.stdin); print(d.get('error', ''))" 2>/dev/null)
+    if [ -n "$error_check" ]; then
+        error "$error_check"
+    fi
+
+    mpd_url=$(echo "$dash_info" | python3 -c "import sys, json; print(json.load(sys.stdin)['mpd_url'])")
+    mpd_content=$(echo "$dash_info" | python3 -c "import sys, json; print(json.load(sys.stdin)['mpd_content'])")
+    manifest_base=$(echo "$dash_info" | python3 -c "import sys, json; print(json.load(sys.stdin)['manifest_base'])")
+
+    log "Found DASH manifest: $mpd_url"
+
+    # Show available resolutions
+    log "Available Resolutions:"
+    echo ""
+    echo "$dash_info" | python3 << 'PYTHON'
+import sys, json
+data = json.load(sys.stdin)
+reps = data['video_reps']
+options = sorted(reps.items(), key=lambda x: int(x[1]['width']))
+for i, (res, info) in enumerate(options, 1):
+    print(f"  {i}. {res} ({info['bandwidth']} bps)")
+PYTHON
+    echo ""
+
+    # Prompt user for resolution selection
+    num_resolutions=$(echo "$dash_info" | python3 -c "import sys, json; print(len(json.load(sys.stdin)['video_reps']))")
+    read -p "Select resolution [1-$num_resolutions]: " choice
+
+    # Get selected resolution
+    selected_res=$(echo "$dash_info" | python3 << PYTHON
+import sys, json
+data = json.load(sys.stdin)
+reps = data['video_reps']
+options = sorted(reps.items(), key=lambda x: int(x[1]['width']))
+try:
+    idx = int(sys.argv[1]) - 1
+    if 0 <= idx < len(options):
+        print(options[idx][0])
+    else:
+        print("ERROR")
+except:
+    print("ERROR")
+sys.exit(0)
+PYTHON
+$(cat <<'ENDARGS'
+$choice
+ENDARGS
+)
+    )
+
+    if [ "$selected_res" = "ERROR" ] || [ -z "$selected_res" ]; then
+        error "Invalid resolution selection"
+    fi
+
+    log "Selected resolution: $selected_res"
+
+    # Save headers for download script
+    HEADERS_FILE="/tmp/dash_headers_$$.json"
+    echo "$dash_info" | python3 -c "import sys, json; d=json.load(sys.stdin); [print(json.dumps(d['headers']))]" > "$HEADERS_FILE"
+
+    # Call download helper
+    bash "$(dirname "$0")/helper_dash.sh" -m "$mpd_content" -b "$manifest_base" -r "$selected_res" -H "$HEADERS_FILE"
 
     # Cleanup
     [ -f "$HEADERS_FILE" ] && rm -f "$HEADERS_FILE"
@@ -330,7 +554,7 @@ download_direct() {
     cd - > /dev/null
 
     # Build command with optional headers
-    local cmd="bash \"$(dirname "$0")/download_hls.sh\" -u \"$base_url\" -p \"$prefix\" -s \"$first_num\" -e \"$last_num\" -o \"video_${resolution}.mp4\""
+    local cmd="bash \"$(dirname "$0")/helper_hls.sh\" -u \"$base_url\" -p \"$prefix\" -s \"$first_num\" -e \"$last_num\" -o \"video_${resolution}.mp4\""
     if [ -n "$headers_file" ] && [ -f "$headers_file" ]; then
         cmd="$cmd -H \"$headers_file\""
     fi
