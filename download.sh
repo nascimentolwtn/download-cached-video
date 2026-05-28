@@ -355,13 +355,8 @@ PYTHON
 
     log "Selected resolution: $selected_res"
 
-    # Extract the data we need before cleaning up
-    manifest_base=$(python3 -c "import json; d=json.load(open('$TEMP_JSON')); print(d['manifest_base'])")
+    # Extract headers
     headers=$(python3 -c "import json; d=json.load(open('$TEMP_JSON')); import sys; json.dump(d['headers'], sys.stdout)")
-
-    # Save MPD content to temp file
-    MPD_FILE="/tmp/dash_manifest_$$.mpd"
-    python3 -c "import json; d=json.load(open('$TEMP_JSON')); print(d['mpd_content'])" > "$MPD_FILE"
 
     rm -f "$TEMP_JSON"
 
@@ -372,12 +367,11 @@ PYTHON
     HEADERS_FILE="/tmp/dash_headers_$$.json"
     echo "$headers" > "$HEADERS_FILE"
 
-    # Call DASH download helper
-    bash "$(dirname "$0")/helper_dash.sh" -m "$MPD_FILE" -b "$manifest_base" -r "$selected_res" -H "$HEADERS_FILE" -o "videos"
+    # Call DASH download helper with original HAR file (contains all captured segment URLs)
+    bash "$(dirname "$0")/helper_dash.sh" -h "$har_file" -r "$selected_res" -H "$HEADERS_FILE" -o "videos"
 
     # Cleanup
     [ -f "$HEADERS_FILE" ] && rm -f "$HEADERS_FILE"
-    [ -f "$MPD_FILE" ] && rm -f "$MPD_FILE"
 }
 
 method_html() {

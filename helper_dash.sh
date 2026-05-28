@@ -13,16 +13,14 @@ error() {
 }
 
 # Parse arguments
-mpd_file=""
-manifest_base=""
+har_file=""
 selected_res=""
 headers_file=""
 output_dir=""
 
-while getopts "m:b:r:H:o:" opt; do
+while getopts "h:r:H:o:" opt; do
     case $opt in
-        m) mpd_file="$OPTARG" ;;
-        b) manifest_base="$OPTARG" ;;
+        h) har_file="$OPTARG" ;;
         r) selected_res="$OPTARG" ;;
         H) headers_file="$OPTARG" ;;
         o) output_dir="$OPTARG" ;;
@@ -30,9 +28,16 @@ while getopts "m:b:r:H:o:" opt; do
     esac
 done
 
-if [ -z "$mpd_file" ] || [ -z "$manifest_base" ] || [ -z "$selected_res" ]; then
-    error "Missing required parameters"
+if [ -z "$har_file" ] || [ -z "$selected_res" ]; then
+    error "Missing required parameters (-h HAR file, -r resolution)"
 fi
+
+if [ ! -f "$har_file" ]; then
+    error "HAR file not found: $har_file"
+fi
+
+# Convert HAR file path to absolute
+har_file="$(cd "$(dirname "$har_file")" && pwd)/$(basename "$har_file")"
 
 # Ensure output directory exists
 if [ -n "$output_dir" ]; then
@@ -45,10 +50,6 @@ fi
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 original_dir="$PWD"
 
-if [ ! -f "$mpd_file" ]; then
-    error "MPD manifest file not found: $mpd_file"
-fi
-
 # Create working directory
 work_dir="/tmp/dash_download_$$"
 mkdir -p "$work_dir"
@@ -56,12 +57,12 @@ cd "$work_dir"
 
 log "Working directory: $work_dir"
 
-# Extract segment URLs
-log "Parsing DASH manifest..."
-python3 "$script_dir/parse_dash_manifest.py" "$mpd_file" "$manifest_base" "$selected_res" > segments.txt
+# Extract segment URLs directly from HAR file
+log "Extracting segments from HAR file..."
+python3 "$script_dir/extract_dash_segments_from_har.py" "$har_file" "$selected_res" > segments.txt
 
 if [ ! -s segments.txt ]; then
-    error "No segments found in manifest"
+    error "No segments found in HAR for resolution $selected_res"
 fi
 
 # Parse segment list
