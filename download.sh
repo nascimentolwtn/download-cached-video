@@ -54,6 +54,9 @@ method_har() {
 
     log "Analyzing HAR file: $har_file"
 
+    # Extract base filename without extension
+    local output_filename=$(basename "$har_file" | sed 's/\.[^.]*$//')
+
     # Detect whether it's HLS (m3u8) or DASH (mpd)
     stream_type=$(python3 << PYTHON
 import json
@@ -92,11 +95,11 @@ PYTHON
     case "$stream_type" in
         hls)
             log "Detected HLS stream (Kiwify-type)"
-            method_har_hls "$har_file"
+            method_har_hls "$har_file" "$output_filename"
             ;;
         dash)
             log "Detected DASH stream (Finclass-type)"
-            method_har_dash "$har_file"
+            method_har_dash "$har_file" "$output_filename"
             ;;
         *)
             error "Could not detect stream type. No m3u8 or mpd found in HAR file."
@@ -106,6 +109,7 @@ PYTHON
 
 method_har_hls() {
     local har_file="$1"
+    local output_filename="$2"
 
     log "Extracting m3u8 from HAR file"
 
@@ -193,7 +197,7 @@ PYTHON
         fi
     fi
 
-    download_with_resolution_selection "$m3u8_url" "auto" "$HEADERS_FILE"
+    download_with_resolution_selection "$m3u8_url" "auto" "$HEADERS_FILE" "$output_filename"
 
     # Cleanup
     [ -f "$HEADERS_FILE" ] && rm -f "$HEADERS_FILE"
@@ -201,6 +205,7 @@ PYTHON
 
 method_har_dash() {
     local har_file="$1"
+    local output_filename="$2"
 
     log "Extracting DASH manifest from HAR file"
 
@@ -368,7 +373,7 @@ PYTHON
     echo "$headers" > "$HEADERS_FILE"
 
     # Call DASH download helper with original HAR file (contains all captured segment URLs)
-    bash "$(dirname "$0")/helper_dash.sh" -h "$har_file" -r "$selected_res" -H "$HEADERS_FILE" -o "videos"
+    bash "$(dirname "$0")/helper_dash.sh" -h "$har_file" -r "$selected_res" -H "$HEADERS_FILE" -o "videos" -n "$output_filename"
 
     # Cleanup
     [ -f "$HEADERS_FILE" ] && rm -f "$HEADERS_FILE"
@@ -426,6 +431,7 @@ download_with_resolution_selection() {
     local m3u8_url="$1"
     local auto_mode="${2:-}"  # 'auto' for HAR mode
     local headers_file="${3:-}"  # Optional headers JSON file
+    local output_filename="${4:-}"  # Optional output filename
 
     # Create temp directory
     TEMP_DIR="/tmp/kiwify_$$"
@@ -442,11 +448,11 @@ download_with_resolution_selection() {
     # Check if it's a master playlist (multiple variants) or direct segment list
     if echo "$m3u8_content" | grep -q "EXT-X-STREAM-INF"; then
         log "Master playlist detected (multiple resolutions)"
-        show_resolution_options "$m3u8_url" "$m3u8_content" "$auto_mode" "$headers_file"
+        show_resolution_options "$m3u8_url" "$m3u8_content" "$auto_mode" "$headers_file" "$output_filename"
     else
         log "Single-stream playlist detected"
         # Parse base URL and segment info
-        download_direct "$m3u8_url" "$m3u8_content" "" "$headers_file"
+        download_direct "$m3u8_url" "$m3u8_content" "" "$headers_file" "$output_filename"
     fi
 }
 
@@ -455,6 +461,7 @@ show_resolution_options() {
     local master_content="$2"
     local auto_choice="${3:-}"  # Optional: auto-select resolution
     local headers_file="${4:-}"  # Optional: headers JSON file
+    local output_filename="${5:-}"  # Optional: output filename
 
     # Parse variants
     echo ""
@@ -515,7 +522,7 @@ show_resolution_options() {
     log "Fetching variant playlist: $variant_playlist"
     variant_content=$(curl -s "$variant_playlist")
 
-    download_direct "$variant_playlist" "$variant_content" "$variant_res" "$headers_file"
+    download_direct "$variant_playlist" "$variant_content" "$variant_res" "$headers_file" "$output_filename"
 }
 
 download_direct() {
@@ -523,6 +530,7 @@ download_direct() {
     local playlist_content="$2"
     local resolution="${3:-1080p}"
     local headers_file="${4:-}"
+    local output_filename="${5:-}"
 
     # Extract base URL
     base_url=$(echo "$playlist_url" | sed 's|/[^/]*$|/|')
@@ -561,8 +569,15 @@ download_direct() {
     # Ensure videos folder exists
     mkdir -p videos
 
+    # Use provided output filename or default format
+    if [ -n "$output_filename" ]; then
+        local output_path="videos/${output_filename}.mp4"
+    else
+        local output_path="videos/video_${resolution}.mp4"
+    fi
+
     # Build command with optional headers
-    local cmd="bash \"$(dirname "$0")/helper_hls.sh\" -u \"$base_url\" -p \"$prefix\" -s \"$first_num\" -e \"$last_num\" -o \"videos/video_${resolution}.mp4\""
+    local cmd="bash \"$(dirname "$0")/helper_hls.sh\" -u \"$base_url\" -p \"$prefix\" -s \"$first_num\" -e \"$last_num\" -o \"$output_path\""
     if [ -n "$headers_file" ] && [ -f "$headers_file" ]; then
         cmd="$cmd -H \"$headers_file\""
     fi

@@ -17,13 +17,15 @@ har_file=""
 selected_res=""
 headers_file=""
 output_dir=""
+output_filename=""
 
-while getopts "h:r:H:o:" opt; do
+while getopts "h:r:H:o:n:" opt; do
     case $opt in
         h) har_file="$OPTARG" ;;
         r) selected_res="$OPTARG" ;;
         H) headers_file="$OPTARG" ;;
         o) output_dir="$OPTARG" ;;
+        n) output_filename="$OPTARG" ;;
         *) error "Unknown option: -$OPTARG" ;;
     esac
 done
@@ -173,32 +175,38 @@ if [ -d audio ] && [ -f audio/seg_1.mp4 ]; then
     find video -name "seg_*.mp4" -type f | sort -V | xargs cat > merged_video.m4v
     find audio -name "seg_*.mp4" -type f | sort -V | xargs cat > merged_audio.m4a
     # Use ffmpeg with timing corrections for fragmented MP4 segments
-    ffmpeg -fflags +igndts -i merged_video.m4v -fflags +igndts -i merged_audio.m4a -c:v copy -c:a aac -map 0:v:0 -map 1:a:0 "video_${selected_res}.mp4" -y 2>&1 | grep -v "frame=" | head -5
+    local output_name="${output_filename}.mp4"
+    [ -z "$output_filename" ] && output_name="video_${selected_res}.mp4"
+    ffmpeg -fflags +igndts -i merged_video.m4v -fflags +igndts -i merged_audio.m4a -c:v copy -c:a aac -map 0:v:0 -map 1:a:0 "$output_name" -y 2>&1 | grep -v "frame=" | head -5
 else
     log "Concatenating video only..."
     # Concatenate DASH MP4 segments with timing correction
-    find video -name "seg_*.mp4" -type f | sort -V | xargs cat > "video_${selected_res}.mp4"
+    local output_name="${output_filename}.mp4"
+    [ -z "$output_filename" ] && output_name="video_${selected_res}.mp4"
+    find video -name "seg_*.mp4" -type f | sort -V | xargs cat > "$output_name"
 fi
 
 # Output file location
-if [ -f "video_${selected_res}.mp4" ]; then
+local output_name="${output_filename}.mp4"
+[ -z "$output_filename" ] && output_name="video_${selected_res}.mp4"
+if [ -f "$output_name" ]; then
     log "✓ Video merged successfully"
 
     # Determine final output path
     if [[ "$output_dir" = /* ]]; then
         # Absolute path
-        final_path="$output_dir/video_${selected_res}.mp4"
+        final_path="$output_dir/$output_name"
     else
         # Relative path - make it relative to original directory
-        final_path="$original_dir/$output_dir/video_${selected_res}.mp4"
+        final_path="$original_dir/$output_dir/$output_name"
     fi
 
     # Move to output directory
     mkdir -p "$(dirname "$final_path")"
-    if mv "video_${selected_res}.mp4" "$final_path" 2>/dev/null; then
-        log "✓ Output saved: $output_dir/video_${selected_res}.mp4"
+    if mv "$output_name" "$final_path" 2>/dev/null; then
+        log "✓ Output saved: $output_dir/$output_name"
     else
-        log "⚠ Output left in: $work_dir/video_${selected_res}.mp4"
+        log "⚠ Output left in: $work_dir/$output_name"
     fi
 else
     error "Failed to create output video"
